@@ -1,0 +1,10 @@
+{
+  "downloadDir": "./tmp/mongodb-memory-server-cache",
+  "version": "5.0.26",
+  "preferGlobalPath": true,
+  "disablePostinstall": true,
+  "skipMD5": true,
+  "checkMD5": false,
+  "downloadMirror": "https://fastdl.mongodb.org/",
+  "downloadIgnoreMissingHeader": true
+}

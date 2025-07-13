@@ -48,7 +48,11 @@ jspm_packages/
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
-.parcel-cache
+
+# MongoDB Memory Server cache
+tmp/
+mongodb-memory-server-cache/
+.mongodb-memory-server-cache/
 
 # next.js build output
 .next
