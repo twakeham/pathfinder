@@ -1,0 +1,79 @@
+{
+  "name": "llm-playground-training-tool",
+  "version": "1.0.0",
+  "description": "LLM Playground and Training Tool - A comprehensive educational platform for AI training",
+  "main": "src/server.js",
+  "bin": {
+    "pathfinder": "./scripts/cli.js"
+  },
+  "scripts": {
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "dev:client": "cd client && npm start",
+    "dev:all": "concurrently \"npm run dev\" \"npm run dev:client\"",
+    "build": "cd client && npm run build",
+    "build:prod": "NODE_ENV=production npm run build",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "format": "prettier --write src/",
+    "pathfinder": "node scripts/cli.js",
+    "db:status": "node scripts/cli.js db status",
+    "db:init": "node scripts/cli.js setup init",
+    "db:seed": "node scripts/cli.js setup seed",
+    "db:reset": "node scripts/cli.js test reset",
+    "deploy:validate": "node scripts/cli.js deploy validate-env",
+    "deploy:build": "node scripts/cli.js deploy build --prod",
+    "deploy:health": "node scripts/cli.js deploy health",
+    "deploy:start": "node scripts/cli.js deploy service start",
+    "deploy:stop": "node scripts/cli.js deploy service stop",
+    "deploy:status": "node scripts/cli.js deploy service status",
+    "docker:build": "node scripts/cli.js docker build",
+    "docker:up": "node scripts/cli.js docker up --detach",
+    "docker:down": "node scripts/cli.js docker down",
+    "logs:view": "node scripts/cli.js deploy logs view",
+    "logs:follow": "node scripts/cli.js deploy logs view --follow"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/enterprise/pathfinder.git"
+  },
+  "keywords": [
+    "ai",
+    "llm",
+    "training",
+    "education",
+    "chatgpt",
+    "openai",
+    "learning"
+  ],
+  "author": "Enterprise Team",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/enterprise/pathfinder/issues"
+  },
+  "homepage": "https://github.com/enterprise/pathfinder#readme",
+  "dependencies": {
+    "axios": "^1.10.0",
+    "bcryptjs": "^3.0.2",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.16.3",
+    "morgan": "^1.10.0",
+    "openai": "^5.9.0",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "chalk": "^4.1.2",
+    "commander": "^14.0.0",
+    "inquirer": "^12.7.0",
+    "jest": "^30.0.4",
+    "nodemon": "^3.1.10",
+    "ora": "^8.2.0",
+    "supertest": "^7.1.3"
+  }
+}
