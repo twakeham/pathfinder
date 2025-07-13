@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { config } = require('./config');
 
 /**
  * MongoDB connection configuration and management
@@ -14,14 +15,10 @@ class DatabaseConnection {
     this.retryDelayMs = 1000; // Initial retry delay
     this.maxRetryDelayMs = 30000; // Maximum retry delay (30 seconds)
     this.connectionOptions = {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-      maxPoolSize: 10, // Maintain up to 10 socket connections
-      serverSelectionTimeoutMS: 5000, // Keep trying to send operations for 5 seconds
-      socketTimeoutMS: 45000, // Close sockets after 45 seconds of inactivity
+      maxPoolSize: config.database.options.maxPoolSize,
+      serverSelectionTimeoutMS: config.database.options.serverSelectionTimeoutMS,
+      socketTimeoutMS: config.database.options.socketTimeoutMS,
       family: 4, // Use IPv4, skip trying IPv6
-      bufferCommands: false, // Disable mongoose buffering
-      bufferMaxEntries: 0, // Disable mongoose buffering
     };
   }
 
@@ -150,7 +147,7 @@ class DatabaseConnection {
     }
 
     try {
-      const mongoUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/pathfinder-dev';
+      const mongoUri = config.database.uri;
       await this.retryConnection(mongoUri);
     } catch (error) {
       console.error('Automatic reconnection failed:', error.message);
@@ -275,7 +272,192 @@ class DatabaseConnection {
   }
 }
 
-// Create singleton instance
+/**
+ * DatabaseManager - Singleton class for managing database connections
+ * This class provides the interface expected by tests and application code
+ */
+class DatabaseManager {
+  constructor() {
+    // Prevent direct instantiation
+    if (new.target === DatabaseManager) {
+      throw new Error('Use DatabaseManager.getInstance()');
+    }
+    
+    this.databaseConnection = new DatabaseConnection();
+    this.maxRetryAttempts = 3; // Default retry attempts for public interface
+  }
+
+  /**
+   * Get singleton instance of DatabaseManager
+   * @returns {DatabaseManager}
+   */
+  static getInstance() {
+    if (!DatabaseManager.instance) {
+      // Use a private constructor bypass
+      DatabaseManager.instance = Object.create(DatabaseManager.prototype);
+      DatabaseManager.instance.databaseConnection = new DatabaseConnection();
+      DatabaseManager.instance.maxRetryAttempts = 3;
+    }
+    return DatabaseManager.instance;
+  }
+
+  /**
+   * Connect to MongoDB database
+   * @param {string} connectionString - MongoDB connection URI
+   * @param {Object} options - Connection options
+   * @returns {Promise<boolean>} - True if connection successful, false otherwise
+   */
+  async connect(connectionString, options = {}) {
+    try {
+      const connectionOptions = {
+        maxPoolSize: 10,
+        serverSelectionTimeoutMS: 5000,
+        socketTimeoutMS: 45000,
+        bufferCommands: false,
+        ...options
+      };
+
+      // Set up event listeners first
+      this.setupEventListeners();
+
+      // Attempt connection with retry logic
+      await this.connectWithRetry(connectionString, connectionOptions);
+      return true;
+    } catch (error) {
+      console.error('Database connection failed:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Connect with retry logic
+   * @param {string} connectionString - MongoDB connection URI
+   * @param {Object} options - Connection options
+   * @returns {Promise<void>}
+   */
+  async connectWithRetry(connectionString, options) {
+    let attempts = 0;
+    const maxAttempts = this.maxRetryAttempts;
+
+    while (attempts < maxAttempts) {
+      try {
+        await mongoose.connect(connectionString, options);
+        return; // Success
+      } catch (error) {
+        attempts++;
+        if (attempts >= maxAttempts) {
+          throw error; // Final attempt failed
+        }
+        
+        // Exponential backoff
+        const delay = Math.pow(2, attempts) * 1000;
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  /**
+   * Set up mongoose connection event listeners
+   */
+  setupEventListeners() {
+    const db = mongoose.connection;
+
+    // Remove existing listeners to avoid duplicates (only if method exists)
+    if (typeof db.removeAllListeners === 'function') {
+      db.removeAllListeners('connected');
+      db.removeAllListeners('error');
+      db.removeAllListeners('disconnected');
+      db.removeAllListeners('open');
+    }
+
+    db.on('connected', () => {
+      console.log('Database reconnected successfully');
+    });
+
+    db.on('error', (error) => {
+      console.error('Database connection error:', error);
+    });
+
+    db.on('disconnected', () => {
+      console.log('Database disconnected');
+    });
+
+    db.once('open', () => {
+      console.log('Database connection opened');
+    });
+  }
+
+  /**
+   * Check if database is connected
+   * @returns {boolean}
+   */
+  isConnected() {
+    return mongoose.connection.readyState === 1;
+  }
+
+  /**
+   * Get connection health information
+   * @returns {Object}
+   */
+  getHealth() {
+    const connection = mongoose.connection;
+    return {
+      status: this.isConnected() ? 'connected' : 'disconnected',
+      readyState: connection.readyState,
+      host: connection.host,
+      port: connection.port,
+      database: connection.name
+    };
+  }
+
+  /**
+   * Disconnect from database
+   * @returns {Promise<void>}
+   */
+  async disconnect() {
+    try {
+      await mongoose.connection.close();
+      console.log('Database connection closed gracefully');
+    } catch (error) {
+      console.error('Error during database disconnection:', error);
+      // Don't re-throw the error, just log it for graceful handling
+    }
+  }
+
+  /**
+   * Classify database errors for appropriate handling
+   * @param {Error} error - The error to classify
+   * @returns {Object} - Error classification with type and retryable flag
+   */
+  classifyError(error) {
+    // Network errors
+    if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND' || error.code === 'ECONNRESET') {
+      return { type: 'network', retryable: true };
+    }
+
+    // Authentication errors
+    if (error.code === 18 || error.message.includes('Authentication failed')) {
+      return { type: 'authentication', retryable: false };
+    }
+
+    // Timeout errors
+    if (error.name === 'MongoTimeoutError' || error.message.includes('timed out')) {
+      return { type: 'timeout', retryable: true };
+    }
+
+    // Default classification
+    return { type: 'unknown', retryable: false };
+  }
+
+  /**
+   * Reset internal state (useful for testing)
+   */
+  reset() {
+    this.maxRetryAttempts = 3;
+  }
+}
+
+// Create singleton instance for backward compatibility
 const databaseConnection = new DatabaseConnection();
 
 /**
@@ -284,7 +466,7 @@ const databaseConnection = new DatabaseConnection();
  * @returns {Promise<void>}
  */
 async function initializeDatabase(enableRetry = true) {
-  const mongoUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/pathfinder-dev';
+  const mongoUri = config.database.uri;
   
   try {
     console.log('Initializing database connection...');
@@ -312,13 +494,14 @@ async function closeDatabaseConnection() {
   return databaseConnection.disconnect();
 }
 
-module.exports = {
-  initializeDatabase,
-  getDatabaseConnection,
-  closeDatabaseConnection,
-  DatabaseConnection,
-  // Additional utility functions
-  healthCheck: () => databaseConnection.healthCheck(),
-  getConnectionStatus: () => databaseConnection.getConnectionStatus(),
-  resetRetryState: () => databaseConnection.resetRetryState(),
-};
+// Export DatabaseManager as the default export for tests
+module.exports = DatabaseManager;
+
+// Also export legacy interface for backward compatibility
+module.exports.initializeDatabase = initializeDatabase;
+module.exports.getDatabaseConnection = getDatabaseConnection;
+module.exports.closeDatabaseConnection = closeDatabaseConnection;
+module.exports.DatabaseConnection = DatabaseConnection;
+module.exports.healthCheck = () => databaseConnection.healthCheck();
+module.exports.getConnectionStatus = () => databaseConnection.getConnectionStatus();
+module.exports.resetRetryState = () => databaseConnection.resetRetryState();

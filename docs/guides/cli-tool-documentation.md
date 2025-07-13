@@ -48,6 +48,14 @@ pathfinder [command] [subcommand] [options]
 7. **docker** - Docker container management
 8. **examples** - Usage examples
 
+### NPM Script Commands (Development Workflow)
+
+9. **Code Quality** - `lint`, `lint:fix`, `format`, `quality:fix`
+10. **Development Servers** - `dev:all`, `dev:server`, `dev:client`
+11. **Build & Production** - `build:prod`, `build:all`, `build:client`
+12. **Environment Management** - `validate:env`, `generate:env`
+13. **Maintenance** - `clean`, `clean:all`, `install:all`, `update:all`
+
 ## Command Reference
 
 ### Database Management (`db`)
@@ -309,6 +317,137 @@ npm run pathfinder -- test generate --users 3
 npm test
 npm run pathfinder -- test clean
 ```
+
+## Development Workflow Commands
+
+### NPM Script Integration
+
+The CLI integrates with numerous npm scripts for development workflow management:
+
+#### Code Quality & Formatting
+```bash
+npm run lint                     # Lint backend code (ESLint)
+npm run lint:fix                 # Fix linting issues automatically
+npm run lint:client              # Lint frontend code
+npm run lint:all                 # Lint both backend and frontend
+
+npm run format                   # Format backend code (Prettier)
+npm run format:check             # Check formatting without fixing
+npm run format:client            # Format frontend code
+npm run format:all               # Format both backend and frontend
+
+npm run quality                  # Run lint + format check
+npm run quality:fix              # Fix all quality issues automatically
+```
+
+#### Development Servers
+```bash
+npm run dev                      # Start backend only with nodemon
+npm run dev:server               # Start backend with auto-restart
+npm run dev:client               # Start frontend only (Vite dev server)
+npm run dev:all                  # Start both frontend and backend concurrently
+```
+
+**Features:**
+- **Concurrent execution** with colored output (cyan for server, magenta for client)
+- **Auto-restart** on file changes using nodemon
+- **Real-time compilation** with Vite for frontend
+- **Proxy configuration** for API calls from frontend to backend
+
+#### Build & Production
+```bash
+npm run build                    # Build frontend for production
+npm run build:client             # Build frontend only (Vite build)
+npm run build:server             # Prepare server for production
+npm run build:all                # Build both frontend and backend
+npm run build:prod               # Full production build with quality checks
+```
+
+**Production Build Process:**
+1. **Pre-build** quality checks (lint + test)
+2. **Frontend build** with Vite optimization
+3. **Backend preparation** for deployment
+4. **Post-build** success confirmation
+
+#### Environment Management
+```bash
+npm run validate:env             # Validate environment variables
+npm run generate:env             # Generate secure environment defaults
+```
+
+**Environment Validation:**
+- Checks required variables presence
+- Validates variable formats and values
+- Security checks for production defaults
+- Provides secure random generation for secrets
+
+#### Maintenance & Cleanup
+```bash
+npm run clean                    # Clean build artifacts and logs
+npm run clean:all                # Clean everything including node_modules
+npm run install:all              # Install dependencies for both projects
+npm run update:all               # Update dependencies for both projects
+```
+
+#### Testing Integration
+```bash
+npm test                         # Run Jest test suite
+npm run test:watch              # Run tests in watch mode
+npm run test:coverage           # Run tests with coverage report
+```
+
+### Development Workflow Best Practices
+
+#### Daily Development
+```bash
+# Start your day
+npm run validate:env
+npm run quality
+npm run dev:all
+
+# Before committing
+npm run quality:fix
+npm test
+```
+
+#### Code Quality Gates
+```bash
+# Pre-commit checks
+npm run lint:all                 # Check code style
+npm run format:all               # Format code
+npm test                         # Run tests
+
+# Pre-production
+npm run build:prod               # Full production build
+```
+
+#### Environment Reset
+```bash
+# Complete reset
+npm run clean:all
+npm run install:all
+npm run db:reset
+npm run validate:env
+```
+
+### Nodemon Configuration
+
+The development server uses a comprehensive nodemon configuration:
+
+**Watched Directories:**
+- `src/` - Backend source code
+- `scripts/` - CLI tools
+- `.env`, `.env.development` - Environment files
+
+**Ignored Directories:**
+- `node_modules/`, `client/`, `tests/`, `docs/`
+- `logs/`, `uploads/`, `backups/`, `coverage/`
+
+**Features:**
+- Custom restart messages with emojis
+- Configurable delay to prevent rapid restarts
+- Proper signal handling for graceful shutdown
+- Verbose logging for debugging
 
 ## Extensibility
 
@@ -885,6 +1024,6 @@ The CLI is designed to easily accommodate additional features:
 
 ---
 
-**Version:** 2.0.0  
-**Last Updated:** 2025-07-13  
+**Version:** 2.1.0  
+**Last Updated:** 2025-07-13 - Added Development Workflow Commands  
 **Compatible with:** Pathfinder v1.0.0+
