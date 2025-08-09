@@ -138,16 +138,28 @@ elif DEV:
         }
     }
 
+_redis_url = os.environ.get('REDIS_URL')
+_redis_host = os.environ.get('REDIS_HOST', '127.0.0.1')
+_redis_port = int(os.environ.get('REDIS_PORT', '6379'))
+_redis_password = os.environ.get('REDIS_PASSWORD', 'Sfk2y2rcz3axazddgk69qxqipuz8m7taix7xdcu7ntluzkzb8u')
+_redis_ssl = get_env_bool('REDIS_SSL', False)
+
+if _redis_url:
+    _hosts = [_redis_url]
+elif _redis_password or _redis_ssl:
+    _hosts = [{
+        'address': (_redis_host, _redis_port),
+        **({'password': _redis_password} if _redis_password else {}),
+        **({'ssl': True} if _redis_ssl else {}),
+    }]
+else:
+    _hosts = [(_redis_host, _redis_port)]
+
 CHANNEL_LAYERS = {
     'default': {
         'BACKEND': 'channels_redis.core.RedisChannelLayer',
         'CONFIG': {
-            'hosts': [
-                (
-                    os.environ.get('REDIS_HOST', '127.0.0.1'),
-                    int(os.environ.get('REDIS_PORT', '6379')),
-                )
-            ]
+            'hosts': _hosts,
         },
     },
 }

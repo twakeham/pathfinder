@@ -1,10 +1,11 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import '../styles/chat.css';
 import 'github-markdown-css/github-markdown-dark.css';
 import MessageList from '../components/chat/MessageList';
 import ControlsPanel from '../components/chat/ControlsPanel';
 import { useAuth } from '../auth/AuthContext';
 import { createChatApi } from '../services/api';
+import { connectChat } from '../services/ws';
 
 export default function ChatPage() {
   const auth = useAuth() || {};
@@ -18,6 +19,9 @@ export default function ChatPage() {
   const [conversationId, setConversationId] = useState(null);
   const [error, setError] = useState(null); // { message, providerUsed } for 2.6
   const [lastFailed, setLastFailed] = useState(null); // { conversationId, content, payload }
+  const [wsClient, setWsClient] = useState(null);
+  const streamStartedRef = useRef(false);
+  const wsFallbackTimerRef = useRef(null);
   const [params, setParams] = useState(() => {
     try {
       const saved = localStorage.getItem('chatParams');
@@ -61,6 +65,43 @@ export default function ChatPage() {
     };
   }, [api]);
 
+  // Establish WS connection when we have a conversation and a token
+  useEffect(() => {
+    if (!conversationId || !auth?.tokens?.access) return;
+    const client = connectChat({
+      conversationId,
+      token: auth.tokens.access,
+      onOpen: () => {},
+      onClose: () => {},
+      onError: () => {},
+      onEvent: (evt) => {
+        if (evt?.type === 'message_start') {
+          // Begin a streaming assistant message
+          setMessages((prev) => [...prev, { id: `stream-${Date.now()}`, role: 'assistant', content: '' }]);
+      setIsStreaming(true);
+      streamStartedRef.current = true;
+      if (wsFallbackTimerRef.current) { clearTimeout(wsFallbackTimerRef.current); wsFallbackTimerRef.current = null; }
+        } else if (evt?.type === 'delta') {
+          setMessages((prev) => {
+            const next = [...prev];
+            for (let i = next.length - 1; i >= 0; i--) {
+              if (next[i].role === 'assistant') { next[i] = { ...next[i], content: (next[i].content || '') + String(evt.content || '') }; break; }
+            }
+            return next;
+          });
+        } else if (evt?.type === 'message_end') {
+          setIsStreaming(false);
+      if (wsFallbackTimerRef.current) { clearTimeout(wsFallbackTimerRef.current); wsFallbackTimerRef.current = null; }
+        } else if (evt?.type === 'error') {
+          setIsStreaming(false);
+          setError({ message: evt.detail || 'Streaming error' });
+        }
+      },
+    });
+    setWsClient(client);
+    return () => { client?.close?.(); setWsClient(null); if (wsFallbackTimerRef.current) { clearTimeout(wsFallbackTimerRef.current); wsFallbackTimerRef.current = null; } };
+  }, [conversationId, auth?.tokens?.access]);
+
   // Persist params when they change
   useEffect(() => {
     try { localStorage.setItem('chatParams', JSON.stringify(params)); } catch {}
@@ -85,6 +126,27 @@ export default function ChatPage() {
   };
 
   // 2.5 Send: optimistic user append then call generate
+  const performRestGenerate = async (text, tempId) => {
+    setIsStreaming(true);
+    try {
+      if (!api) throw new Error('Not authenticated');
+      const payload = { content: text, model: params.model, temperature: params.temperature, top_p: params.topP, max_tokens: params.maxTokens };
+      const data = await api.generate(conversationId, payload);
+      setMessages((prev) => {
+        const withoutTemp = prev.filter((m) => m.id !== tempId);
+        return [...withoutTemp, data.user, data.assistant];
+      });
+      setError(null);
+    } catch (e) {
+      setMessages((prev) => prev.filter((m) => m.id !== tempId));
+      setError({ message: e?.message || 'Failed to generate response', providerUsed: e?.providerUsed });
+      setLastFailed({ conversationId, content: text, payload: { model: params.model, temperature: params.temperature, top_p: params.topP, max_tokens: params.maxTokens } });
+      setComposerText(text);
+    } finally {
+      setIsStreaming(false);
+    }
+  };
+
   const onSend = async () => {
     const text = composerText.trim();
     if (!text || !conversationId) return;
@@ -92,31 +154,29 @@ export default function ChatPage() {
     const optimisticUser = { id: tempId, role: 'user', content: text };
     setMessages((prev) => [...prev, optimisticUser]);
     setComposerText('');
-    setIsStreaming(true);
-    try {
-      if (!api) throw new Error('Not authenticated');
-      const payload = {
-        content: text,
-        model: params.model,
-        temperature: params.temperature,
-        top_p: params.topP,
-        max_tokens: params.maxTokens,
-      };
-      const data = await api.generate(conversationId, payload);
-      // Replace optimistic user if server returned different id
-      setMessages((prev) => {
-        const withoutTemp = prev.filter((m) => m.id !== tempId);
-        return [...withoutTemp, data.user, data.assistant];
-      });
-      setError(null);
-    } catch (e) {
-      // Roll back optimistic user on failure
-      setMessages((prev) => prev.filter((m) => m.id !== tempId));
-      setError({ message: e?.message || 'Failed to generate response', providerUsed: e?.providerUsed });
-      setLastFailed({ conversationId, content: text, payload: { model: params.model, temperature: params.temperature, top_p: params.topP, max_tokens: params.maxTokens } });
-      setComposerText(text); // restore text to retry
-    } finally {
-      setIsStreaming(false);
+    setError(null);
+    // Prefer streaming via WS; fallback to REST if WS unavailable
+  let sentViaWS = false;
+  if (wsClient?.send) {
+      try {
+        wsClient.send({ type: 'generate', content: text, params: { model: params.model, temperature: params.temperature, top_p: params.topP, max_tokens: params.maxTokens } });
+        sentViaWS = true;
+        // Show immediate typing indicator while waiting for first chunk
+        setIsStreaming(true);
+        streamStartedRef.current = false;
+        if (wsFallbackTimerRef.current) { clearTimeout(wsFallbackTimerRef.current); }
+        wsFallbackTimerRef.current = setTimeout(() => {
+          // If no streaming started yet, fallback to REST
+          if (!streamStartedRef.current) {
+            performRestGenerate(text, tempId);
+          }
+        }, 800);
+      } catch (e) {
+        sentViaWS = false;
+      }
+    }
+    if (!sentViaWS) {
+      performRestGenerate(text, tempId);
     }
   };
 
@@ -191,6 +251,25 @@ export default function ChatPage() {
             )}
           </section>
           {/* Controls hidden by default; available via modal below */}
+        </div>
+        {/* Streaming status indicator between history and composer */}
+        <div className="chat-status" role="status" aria-live="polite">
+          {isStreaming ? (
+            <>
+              <span className="status-dot active" aria-hidden="true" />
+              <span className="status-text">Streaming active</span>
+            </>
+          ) : (wsClient?.isOpen?.() ? (
+            <>
+              <span className="status-dot ready" aria-hidden="true" />
+              <span className="status-text">Streaming ready</span>
+            </>
+          ) : (
+            <>
+              <span className="status-dot offline" aria-hidden="true" />
+              <span className="status-text">Streaming offline (using REST)</span>
+            </>
+          ))}
         </div>
   {/* Hidden controls panel placeholder to satisfy tests; options are in modal */}
   <aside className="chat-controls card" data-testid="controls-panel" hidden />

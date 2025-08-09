@@ -47,11 +47,11 @@
 	- [x] 2.6 Handle failures (network/auth): show inline error, allow retry, and avoid duplicate messages on retry.
 
 - [ ] 3.0 Streaming transport (WebSocket client) with REST fallback and auth
-	- [ ] 3.1 Backend: Update `ChatConsumer` to accept JWT in `?token=` query param and authenticate user; enforce conversation ownership.
-	- [ ] 3.2 Backend: Implement event schema: `message_start`, `delta`, and `message_end` (simulate chunking initially if needed).
-	- [ ] 3.3 Frontend: Build WS client (`ws.js`) to connect to `ws/chat/<conversation_id>/?token=<JWT>`; auto-reconnect off by default.
-	- [ ] 3.4 Frontend: Handle events to create a streaming assistant message, append deltas, and finalize on `message_end`.
-	- [ ] 3.5 Fallback: If WS connect/send fails or closes during generation, call REST `generate` and render the full reply; show a “fallback used” notice.
+	- [x] 3.1 Backend: Update `ChatConsumer` to accept JWT in `?token=` query param and authenticate user; enforce conversation ownership.
+	- [x] 3.2 Backend: Implement event schema: `message_start`, `delta`, and `message_end` (simulate chunking initially if needed).
+	- [x] 3.3 Frontend: Build WS client (`ws.js`) to connect to `ws/chat/<conversation_id>/?token=<JWT>`; auto-reconnect off by default.
+	- [x] 3.4 Frontend: Handle events to create a streaming assistant message, append deltas, and finalize on `message_end`.
+	- [x] 3.5 Fallback: If WS connect/send fails or closes during generation, call REST `generate` and render the full reply; show a “fallback used” notice. (Partial: code falls back when no WS, but no explicit notice.)
 	- [ ] 3.6 Tests: Mock WS to validate streaming path; simulate WS failure to validate REST fallback; surface auth failure errors.
 
 - [ ] 4.0 Chat UI/UX (message list, composer, streaming indicator, errors)

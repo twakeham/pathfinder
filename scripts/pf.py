@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import importlib.util
 import shutil
 import signal
 import subprocess
@@ -99,6 +100,11 @@ def run_parallel(cmds: List[List[str]], cwds: List[Optional[Path]], envs: List[O
         return 130
 
 
+def daphne_installed() -> bool:
+    """Return True if Daphne is importable in the current environment."""
+    return importlib.util.find_spec("daphne") is not None
+
+
 def cmd_backend(args: argparse.Namespace) -> int:
     py = get_python_exe()
     env = {"DJANGO_DEV": "1"} if args.dev else None
@@ -147,6 +153,67 @@ def cmd_install(args: argparse.Namespace) -> int:
     return code
 
 
+def cmd_run_daphne(args: argparse.Namespace) -> int:
+    """Run the backend using Daphne (ASGI server)."""
+    if not daphne_installed():
+        print("Daphne is not installed in this venv. Install it with:")
+        print(r"  .\.venv\Scripts\pip install daphne")
+        return 1
+
+    py = get_python_exe()
+    cmd: List[str] = [
+        py,
+        "-m",
+        "daphne",
+        "-b",
+        args.host,
+        "-p",
+        str(args.port),
+        "--access-log",
+        "-",
+    ]
+    if args.reload:
+        # Daphne doesn't support --reload; keep flag for UX parity and warn only.
+        print("[info] --reload is not supported by Daphne; ignoring. Use pf backend for autoreload.")
+    cmd.append("config.asgi:application")
+
+    return run(cmd, cwd=BACKEND_DIR)
+
+
+def cmd_dev_daphne(args: argparse.Namespace) -> int:
+    """Run backend via Daphne and frontend concurrently."""
+    if not daphne_installed():
+        print("Daphne is not installed in this venv. Install it with:")
+        print(r"  .\.venv\Scripts\pip install daphne")
+        return 1
+
+    py = get_python_exe()
+    npm = shutil.which("npm") or "npm"
+
+    daphne_cmd: List[str] = [
+        py,
+        "-m",
+        "daphne",
+        "-b",
+        args.host,
+        "-p",
+        str(args.port),
+        "--access-log",
+        "-",
+        "config.asgi:application",
+    ]
+
+    cmds = [daphne_cmd, [npm, "start"]]
+    cwds = [BACKEND_DIR, FRONTEND_DIR]
+    # Point CRA frontend to backend WS host:port
+    fe_ws_host = f"localhost:{args.port}"
+    envs = [
+        {"DJANGO_DEV": "1"},
+        {"REACT_APP_BACKEND_WS": fe_ws_host},
+    ]
+    return run_parallel(cmds, cwds, envs)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pf", description="Pathfinder project CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -173,6 +240,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_install = sub.add_parser("install", help="Install dependencies")
     p_install.add_argument("target", choices=["backend", "frontend", "all"], default="all", nargs="?")
     p_install.set_defaults(func=cmd_install)
+
+    # Run backend on Daphne (ASGI)
+    p_daphne = sub.add_parser("run-daphne", help="Run backend via Daphne (ASGI)")
+    p_daphne.add_argument("-H", "--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
+    p_daphne.add_argument("-p", "--port", type=int, default=8000, help="Port (default: 8000)")
+    p_daphne.add_argument("--reload", action="store_true", help="Auto-reload on code changes (dev)")
+    p_daphne.set_defaults(func=cmd_run_daphne)
+
+    # Dev with Daphne + Frontend
+    p_dev_d = sub.add_parser("dev-daphne", help="Run Daphne (ASGI) backend and frontend concurrently")
+    p_dev_d.add_argument("-H", "--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
+    p_dev_d.add_argument("-p", "--port", type=int, default=8000, help="Backend port (default: 8000)")
+    p_dev_d.set_defaults(func=cmd_dev_daphne)
 
     p_test = sub.add_parser("test-chat", help="Smoke test chat + AI backend (auth, create conversation, generate reply)")
     p_test.add_argument("--baseurl", "-b", default="http://127.0.0.1:8000", help="Backend base URL (default: %(default)s)")
