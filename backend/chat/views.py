@@ -52,16 +52,25 @@ class ConversationViewSet(viewsets.ModelViewSet):
 		user_msg = Message.objects.create(conversation=convo, role='user', content=text)
 		# Build history and call provider
 		history = [ChatMessage(role=m.role, content=m.content) for m in convo.messages.all()]
-		provider = None
-		try:
-			provider = OpenAIModel() if (request.query_params.get('provider') == 'openai' or getattr(settings, 'USE_OPENAI', False)) else EchoModel()
-		except Exception:
+		# Decide provider
+		force = (request.query_params.get('provider') or '').lower().strip()
+		want_openai = force == 'openai' or getattr(settings, 'USE_OPENAI', False)
+		provider_used = 'echo'
+		if want_openai:
+			try:
+				provider = OpenAIModel()
+				provider_used = 'openai'
+			except Exception as e:
+				# Make the failure visible instead of silently echoing
+				return Response({'detail': 'OpenAI provider not available', 'error': str(e)}, status=502)
+		else:
 			provider = EchoModel()
 		reply = provider.chat(history)
 		asst_msg = Message.objects.create(conversation=convo, role='assistant', content=reply.content)
 		return Response({
 			'user': MessageSerializer(user_msg).data,
 			'assistant': MessageSerializer(asst_msg).data,
+			'provider_used': provider_used,
 		}, status=201)
 
 
