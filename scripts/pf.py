@@ -21,6 +21,9 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional
+import json
+from urllib import request as urlrequest
+from urllib import error as urlerror
 
 # Paths
 ROOT_DIR: Path = Path(__file__).resolve().parents[1]
@@ -171,6 +174,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_install.add_argument("target", choices=["backend", "frontend", "all"], default="all", nargs="?")
     p_install.set_defaults(func=cmd_install)
 
+    p_test = sub.add_parser("test-chat", help="Smoke test chat + AI backend (auth, create conversation, generate reply)")
+    p_test.add_argument("--baseurl", "-b", default="http://127.0.0.1:8000", help="Backend base URL (default: %(default)s)")
+    p_test.add_argument("--username", "-u", help="Username for JWT auth (required)")
+    p_test.add_argument("--password", "-p", help="Password for JWT auth (required)")
+    p_test.add_argument("--content", "-c", default="Hello from CLI", help="Prompt to send to generate endpoint")
+    p_test.add_argument("--title", default="CLI Test Conversation", help="Conversation title")
+    p_test.add_argument("--provider", choices=["echo", "openai"], help="Force provider for generate (overrides server default)")
+    p_test.set_defaults(func=cmd_test_chat)
+
     return parser
 
 
@@ -178,6 +190,77 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
     return args.func(args)
+
+
+def _http_json(method: str, url: str, body: Optional[dict] = None, headers: Optional[dict] = None) -> tuple[int, dict]:
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+    req = urlrequest.Request(url=url, data=data, method=method)
+    req.add_header("Content-Type", "application/json")
+    if headers:
+        for k, v in headers.items():
+            req.add_header(k, v)
+    try:
+        with urlrequest.urlopen(req) as resp:
+            status = resp.getcode() or 0
+            content = resp.read().decode("utf-8") or "{}"
+            try:
+                return status, json.loads(content)
+            except json.JSONDecodeError:
+                return status, {"raw": content}
+    except urlerror.HTTPError as e:
+        content = e.read().decode("utf-8") if hasattr(e, "read") else ""
+        try:
+            return e.code, json.loads(content)
+        except Exception:
+            return e.code, {"error": content or str(e)}
+    except urlerror.URLError as e:
+        return 0, {"error": str(e)}
+
+
+def cmd_test_chat(args: argparse.Namespace) -> int:
+    base = args.baseurl.rstrip("/")
+    user = args.username or os.environ.get("PF_USERNAME")
+    pwd = args.password or os.environ.get("PF_PASSWORD")
+    if not user or not pwd:
+        print("Username and password are required. Pass --username/--password or set PF_USERNAME/PF_PASSWORD.")
+        return 2
+
+    # 1) Token
+    status, tok = _http_json("POST", f"{base}/api/auth/token/", {"username": user, "password": pwd})
+    if status != 200 or "access" not in tok:
+        print("Auth failed:", status, tok)
+        return 1
+    headers = {"Authorization": f"Bearer {tok['access']}"}
+    print("✓ Auth OK")
+
+    # 2) Create conversation
+    status, conv = _http_json("POST", f"{base}/api/chat/conversations/", {"title": args.title}, headers)
+    if status not in (200, 201) or "id" not in conv:
+        print("Create conversation failed:", status, conv)
+        return 1
+    conv_id = conv["id"]
+    print(f"✓ Conversation created: {conv_id}")
+
+    # 3) Generate reply
+    url = f"{base}/api/chat/conversations/{conv_id}/generate/"
+    if args.provider:
+        url += f"?provider={args.provider}"
+    status, gen = _http_json("POST", url, {"content": args.content}, headers)
+    if status not in (200, 201):
+        print("Generate failed:", status, gen)
+        return 1
+    assistant = (gen.get("assistant") or {}).get("content") or gen.get("content")
+    print("✓ Assistant reply:\n", assistant)
+
+    # 4) Fetch messages
+    status, msgs = _http_json("GET", f"{base}/api/chat/conversations/{conv_id}/messages", None, headers)
+    if status == 200:
+        print(f"✓ Messages count: {len(msgs) if isinstance(msgs, list) else 'n/a'}")
+    else:
+        print("Fetch messages warned:", status)
+    return 0
 
 
 if __name__ == "__main__":
