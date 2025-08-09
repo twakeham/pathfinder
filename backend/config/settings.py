@@ -7,7 +7,9 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Load environment variables from project root and backend dirs if present
+# Supports: .env at repo root, backend.env at repo root, and backend/.env
 load_dotenv(BASE_DIR.parent / '.env')
+load_dotenv(BASE_DIR.parent / 'backend.env')
 load_dotenv(BASE_DIR / '.env')
 
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'dev-secret-key')
