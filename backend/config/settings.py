@@ -31,6 +31,9 @@ DEBUG = get_env_bool('DJANGO_DEBUG', DEV)
 
 ALLOWED_HOSTS = get_env_list('DJANGO_ALLOWED_HOSTS', '*')
 
+# Feature flags / providers
+USE_OPENAI = get_env_bool('USE_OPENAI', False)
+
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
