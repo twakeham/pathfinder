@@ -1,0 +1,1276 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useAuth } from '../../auth/AuthContext';
+
+const LESSONS_API_BASE = '/api/courses/lessons/';
+const CONTENT_BLOCKS_API_BASE = '/api/courses/content-blocks/';
+
+const BLOCK_TYPES = [
+  { value: 'text', label: '📄 Text', icon: '📄' },
+  { value: 'heading', label: '📰 Heading', icon: '📰' },
+  { value: 'image', label: '🖼️ Image', icon: '🖼️' },
+  { value: 'code', label: '💻 Code', icon: '💻' },
+  { value: 'video', label: '📹 Video', icon: '📹' },
+  { value: 'prompt', label: '🤖 Prompt', icon: '🤖' },
+  { value: 'divider', label: '➖ Divider', icon: '➖' },
+];
+
+export default function LessonEditor() {
+  const { lessonId } = useParams();
+  const navigate = useNavigate();
+  const { apiFetch } = useAuth();
+
+  const [lesson, setLesson] = useState(null);
+  const [lessonLoading, setLessonLoading] = useState(true);
+  const [lessonError, setLessonError] = useState('');
+  const [lessonSaving, setLessonSaving] = useState(false);
+  const [form, setForm] = useState({ title: '', duration_minutes: '', is_published: false });
+
+  const [blocks, setBlocks] = useState([]);
+  const [blocksLoading, setBlocksLoading] = useState(true);
+  const [blocksError, setBlocksError] = useState('');
+  const [dragIndex, setDragIndex] = useState(null);
+  const [dragOverIndex, setDragOverIndex] = useState(null);
+
+  const [slashMenuOpen, setSlashMenuOpen] = useState(null); // { blockIndex, position }
+  const [focusedBlockId, setFocusedBlockId] = useState(null);
+  const slashMenuRef = useRef(null);
+  const editorRef = useRef(null);
+
+  useEffect(() => {
+    const loadLesson = async () => {
+      setLessonLoading(true);
+      setLessonError('');
+      try {
+        const res = await apiFetch(`${LESSONS_API_BASE}${lessonId}/`);
+        if (!res.ok) throw new Error(`Failed to load lesson (${res.status})`);
+        const data = await res.json();
+        setLesson(data);
+        setForm({ title: data.title || '', duration_minutes: data.duration_minutes ?? '', is_published: !!data.is_published });
+      } catch (e) {
+        setLessonError(e.message || 'Error loading lesson');
+      } finally {
+        setLessonLoading(false);
+      }
+    };
+    loadLesson();
+  }, [lessonId, apiFetch]);
+
+  const loadBlocks = async () => {
+    setBlocksLoading(true);
+    setBlocksError('');
+    try {
+      const res = await apiFetch(`${LESSONS_API_BASE}${lessonId}/content-blocks/`);
+      if (!res.ok) throw new Error(`Failed to load blocks (${res.status})`);
+      const data = await res.json();
+      setBlocks((data || []).slice().sort((a, b) => (a.order - b.order) || (a.id - b.id)));
+    } catch (e) {
+      setBlocksError(e.message || 'Error loading blocks');
+    } finally {
+      setBlocksLoading(false);
+    }
+  };
+
+  useEffect(() => { loadBlocks(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [lessonId]);
+
+  const canSaveLesson = useMemo(() => !!form.title.trim(), [form.title]);
+  const setLessonField = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }));
+
+  const saveLesson = async () => {
+    if (!canSaveLesson) return;
+    setLessonSaving(true);
+    setLessonError('');
+    try {
+      const res = await apiFetch(`${LESSONS_API_BASE}${lessonId}/`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+          title: form.title,
+          duration_minutes: form.duration_minutes ? Number(form.duration_minutes) : null,
+          is_published: !!form.is_published,
+        })
+      });
+      if (!res.ok) throw new Error(`Failed to save lesson (${res.status})`);
+    } catch (e) {
+      setLessonError(e.message || 'Failed to save lesson');
+    } finally {
+      setLessonSaving(false);
+    }
+  };
+
+  // Blocks helpers
+  const normalizeBlockData = (type, data = {}) => {
+    switch (type) {
+      case 'text': return { content: data.content || '' };
+      case 'heading': return { content: data.content || '', level: data.level || 1 };
+      case 'image': return { url: data.url || '', caption: data.caption || '', alt: data.alt || '' };
+      case 'code': return { language: data.language || 'plaintext', code: data.code || '', show_line_numbers: !!data.show_line_numbers };
+      case 'video': return { url: data.url || '', provider: data.provider || 'file', start: Number(data.start || 0) || 0, end: data.end ? Number(data.end) : null };
+      case 'prompt': return { prompt: data.prompt || '', placeholder: data.placeholder || '' };
+      case 'divider': return {};
+      default: return data || {};
+    }
+  };
+
+  const insertBlockAt = async (index, type = 'text', focus = true) => {
+    try {
+      setBlocksError('');
+      const newOrder = index + 1;
+      // Adjust orders of existing blocks
+      const updatedBlocks = blocks.map(b => b.order >= newOrder ? { ...b, order: b.order + 1 } : b);
+      
+      const payload = { 
+        lesson: Number(lessonId), 
+        block_type: type, 
+        title: '', 
+        data: normalizeBlockData(type), 
+        order: newOrder,
+        is_published: false
+      };
+      
+      const res = await apiFetch(CONTENT_BLOCKS_API_BASE, { 
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify(payload) 
+      });
+      
+      if (!res.ok) {
+        let body = ''; try { body = await res.text(); } catch {}
+        throw new Error(`Failed to create block (${res.status}): ${body || res.statusText}`);
+      }
+      
+      const newBlock = await res.json();
+      
+      // Update all affected block orders
+      await Promise.all(
+        updatedBlocks
+          .filter(b => b.order > newOrder)
+          .map(b => updateBlock(b.id, { order: b.order }))
+      );
+      
+      await loadBlocks();
+      
+      if (focus) {
+        setTimeout(() => setFocusedBlockId(newBlock.id), 100);
+      }
+    } catch (err) {
+      setBlocksError(err.message || 'Error inserting block');
+    }
+  };
+
+  const updateBlock = async (id, patch) => {
+    const res = await apiFetch(`${CONTENT_BLOCKS_API_BASE}${id}/`, { 
+      method: 'PATCH', 
+      headers: { 'Content-Type': 'application/json' }, 
+      body: JSON.stringify(patch) 
+    });
+    if (!res.ok) {
+      let body = ''; try { body = await res.text(); } catch {}
+      throw new Error(`Failed to save block (${res.status}): ${body || res.statusText}`);
+    }
+  };
+
+  const deleteBlock = async (id) => {
+    try {
+      const res = await apiFetch(`${CONTENT_BLOCKS_API_BASE}${id}/`, { method: 'DELETE' });
+      if (!res.ok && res.status !== 204) {
+        let body = ''; try { body = await res.text(); } catch {}
+        throw new Error(`Failed to delete block (${res.status}): ${body || res.statusText}`);
+      }
+      await loadBlocks();
+    } catch (err) {
+      setBlocksError(err.message || 'Error deleting block');
+    }
+  };
+
+  const moveBlock = useCallback(async (fromIndex, toIndex) => {
+    if (fromIndex === toIndex) return;
+    
+    const newBlocks = [...blocks];
+    const [movedBlock] = newBlocks.splice(fromIndex, 1);
+    newBlocks.splice(toIndex, 0, movedBlock);
+    
+    // Update local state immediately for smooth UX
+    setBlocks(newBlocks);
+    
+    // Update orders in backend
+    try {
+      await Promise.all(
+        newBlocks.map((block, index) => 
+          updateBlock(block.id, { order: index + 1 })
+        )
+      );
+    } catch (err) {
+      setBlocksError(err.message || 'Error reordering blocks');
+      // Reload to get correct state
+      await loadBlocks();
+    }
+  }, [blocks]);
+
+  const handleKeyDown = (e, blockIndex, block) => {
+    const isTextType = ['text', 'heading', 'prompt'].includes(block.block_type);
+    
+    if (e.key === '/' && isTextType && e.target.selectionStart === 0) {
+      e.preventDefault();
+      const rect = e.target.getBoundingClientRect();
+      setSlashMenuOpen({ 
+        blockIndex, 
+        position: { x: rect.left, y: rect.bottom + window.scrollY } 
+      });
+      return;
+    }
+    
+    if (e.key === 'Enter' && !e.shiftKey && isTextType) {
+      e.preventDefault();
+      insertBlockAt(blockIndex, 'text');
+      return;
+    }
+    
+    if (e.key === 'Backspace' && isTextType) {
+      const content = block.data?.content || '';
+      if (content === '' && blocks.length > 1 && e.target.selectionStart === 0) {
+        e.preventDefault();
+        deleteBlock(block.id);
+        // Focus previous block if available
+        if (blockIndex > 0) {
+          setTimeout(() => setFocusedBlockId(blocks[blockIndex - 1].id), 100);
+        }
+        return;
+      }
+    }
+    
+    if (e.key === 'ArrowUp' && e.target.selectionStart === 0 && blockIndex > 0) {
+      e.preventDefault();
+      setFocusedBlockId(blocks[blockIndex - 1].id);
+      return;
+    }
+    
+    if (e.key === 'ArrowDown' && e.target.selectionEnd === e.target.value.length && blockIndex < blocks.length - 1) {
+      e.preventDefault();
+      setFocusedBlockId(blocks[blockIndex + 1].id);
+      return;
+    }
+  };
+
+  const handleSlashMenuSelect = (type) => {
+    if (slashMenuOpen) {
+      insertBlockAt(slashMenuOpen.blockIndex, type);
+      setSlashMenuOpen(null);
+    }
+  };
+
+  // Auto-save block content with debounce
+  const debounceTimeouts = useRef({});
+  const debouncedSave = useCallback((blockId, patch) => {
+    if (debounceTimeouts.current[blockId]) {
+      clearTimeout(debounceTimeouts.current[blockId]);
+    }
+    
+    debounceTimeouts.current[blockId] = setTimeout(async () => {
+      try {
+        await updateBlock(blockId, patch);
+      } catch (err) {
+        setBlocksError(err.message || 'Error auto-saving block');
+      }
+    }, 1000);
+  }, []);
+
+  const updateBlockData = (blockId, patch) => {
+    setBlocks(prev => prev.map(b => 
+      b.id === blockId ? { ...b, ...patch } : b
+    ));
+    
+    // Auto-save after a delay
+    debouncedSave(blockId, patch);
+  };
+
+  // Click outside to close slash menu
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (slashMenuRef.current && !slashMenuRef.current.contains(e.target)) {
+        setSlashMenuOpen(null);
+      }
+    };
+    
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const reorderLocal = (fromIdx, toIdx) => {
+    if (fromIdx === null || toIdx === null || fromIdx === toIdx) return null;
+    const next = blocks.slice();
+    const [moved] = next.splice(fromIdx, 1);
+    next.splice(toIdx, 0, moved);
+    setBlocks(next);
+    return next;
+  };
+
+  const persistOrder = async (list) => {
+    const arr = Array.isArray(list) ? list : blocks;
+    await Promise.all(arr.map((b, i) => updateBlock(b.id, { order: i + 1 })));
+    await loadBlocks();
+  };
+
+  const onKeyDownInText = (e, idx, block) => {
+    if (e.key === '/' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+      // open slash menu for this block
+      e.preventDefault();
+      setSlashMenuOpenFor(block.id);
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      // Insert a new text block below
+      insertBlockAt(idx + 1, 'text').catch(err => setBlocksError(err.message || 'Error inserting block'));
+    }
+    if (e.key === 'Backspace' && !block.title && !(block.data?.content || '').length && blocks.length > 1) {
+      // delete empty block on backspace
+      // let it pass to blur; we handle explicit delete via UI to avoid surprises
+    }
+  };
+
+  const SlashMenu = () => (
+    <div 
+      ref={slashMenuRef}
+      style={{ 
+        position: 'fixed',
+        background: '#111827', 
+        border: '1px solid #374151', 
+        borderRadius: 8, 
+        padding: 8, 
+        zIndex: 1000, 
+        boxShadow: '0 10px 30px rgba(0,0,0,0.5)',
+        minWidth: 200
+      }}
+    >
+      {BLOCK_TYPES.map(t => (
+        <div 
+          key={t.value} 
+          onClick={() => handleSlashMenuSelect(t.value)} 
+          style={{ 
+            padding: '8px 12px', 
+            borderRadius: 6, 
+            cursor: 'pointer', 
+            color: '#e5e7eb',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            fontSize: 14,
+            ':hover': { background: '#1f2937' }
+          }}
+          onMouseEnter={(e) => e.target.style.background = '#1f2937'}
+          onMouseLeave={(e) => e.target.style.background = 'transparent'}
+        >
+          <span>{t.icon}</span>
+          <span>{t.label.replace(/^.+ /, '')}</span>
+        </div>
+      ))}
+    </div>
+  );
+
+  const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
+  useEffect(() => {
+    if (slashMenuOpenFor) {
+      // position near the block container
+      const el = document.getElementById(`block-${slashMenuOpenFor}`);
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        setMenuPos({ x: rect.left + 40, y: rect.top + 10 + window.scrollY });
+      }
+    }
+  }, [slashMenuOpenFor]);
+
+  return (
+    <div style={{ padding: 16, maxWidth: 900, margin: '0 auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+        <h3 style={{ margin: 0, color: '#e5e7eb', fontSize: 24 }}>Lesson Editor</h3>
+        {lesson && <Link to={`/instructor/modules/${lesson.module}/edit`} style={{ color: '#93c5fd', textDecoration: 'none' }}>← Back to Module</Link>}
+      </div>
+
+      {/* Lesson metadata */}
+      <div style={{ background: '#111827', color: '#e5e7eb', border: '1px solid #1f2937', borderRadius: 12, overflow: 'hidden', marginBottom: 24 }}>
+        <div style={{ padding: 20, borderBottom: '1px solid #1f2937' }}>
+          <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 16 }}>Lesson Settings</div>
+          {lessonLoading ? (
+            <div style={{ color: '#9ca3af' }}>Loading…</div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: 16, alignItems: 'end' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: 14, color: '#9ca3af', marginBottom: 6 }}>Title</label>
+                <input 
+                  value={form.title} 
+                  onChange={setLessonField('title')} 
+                  style={{ 
+                    width: '100%', 
+                    padding: '12px 16px', 
+                    borderRadius: 8, 
+                    border: '1px solid #374151', 
+                    background: '#0b1220', 
+                    color: '#e5e7eb',
+                    fontSize: 16
+                  }} 
+                  placeholder="Enter lesson title..."
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: 14, color: '#9ca3af', marginBottom: 6 }}>Duration (min)</label>
+                <input 
+                  type="number" 
+                  min={0} 
+                  value={form.duration_minutes} 
+                  onChange={setLessonField('duration_minutes')} 
+                  style={{ 
+                    width: 120, 
+                    padding: '12px 16px', 
+                    borderRadius: 8, 
+                    border: '1px solid #374151', 
+                    background: '#0b1220', 
+                    color: '#e5e7eb'
+                  }} 
+                />
+              </div>
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                  <input 
+                    type="checkbox" 
+                    checked={!!form.is_published} 
+                    onChange={setLessonField('is_published')} 
+                    style={{ margin: 0 }}
+                  />
+                  <span style={{ color: '#e5e7eb', fontSize: 14 }}>Published</span>
+                </label>
+                <button 
+                  onClick={saveLesson} 
+                  disabled={lessonSaving || !canSaveLesson} 
+                  style={{ 
+                    padding: '12px 20px', 
+                    borderRadius: 8, 
+                    background: canSaveLesson ? '#2563eb' : '#374151', 
+                    color: 'white', 
+                    border: 'none',
+                    cursor: canSaveLesson ? 'pointer' : 'not-allowed',
+                    fontSize: 14,
+                    fontWeight: 500
+                  }}
+                >
+                  {lessonSaving ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            </div>
+          )}
+          {lessonError && <div style={{ marginTop: 12, color: '#ef4444', fontSize: 14 }}>{lessonError}</div>}
+        </div>
+      </div>
+
+      {/* Content Editor */}
+      <div style={{ position: 'relative' }}>
+        <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ fontSize: 18, fontWeight: 600, color: '#e5e7eb' }}>Content</div>
+          <button 
+            onClick={() => insertBlockAt(blocks.length, 'text')} 
+            style={{ 
+              padding: '8px 16px', 
+              borderRadius: 8, 
+              background: 'transparent', 
+              color: '#93c5fd', 
+              border: '1px solid #374151',
+              cursor: 'pointer',
+              fontSize: 14
+            }}
+          >
+            + Add Block
+          </button>
+        </div>
+
+        {blocksError && <div style={{ color: '#ef4444', marginBottom: 16, fontSize: 14 }}>{blocksError}</div>}
+        
+        <div ref={editorRef} style={{ minHeight: 200 }}>
+          {blocksLoading ? (
+            <div style={{ 
+              padding: 60, 
+              textAlign: 'center', 
+              color: '#9ca3af',
+              background: '#111827',
+              borderRadius: 12,
+              border: '1px solid #1f2937'
+            }}>
+              Loading content blocks…
+            </div>
+          ) : blocks.length === 0 ? (
+            <div style={{ 
+              padding: 60, 
+              textAlign: 'center', 
+              color: '#9ca3af',
+              background: '#111827',
+              borderRadius: 12,
+              border: '1px solid #1f2937'
+            }}>
+              <div style={{ fontSize: 16, marginBottom: 8 }}>Start writing your lesson</div>
+              <div style={{ fontSize: 14 }}>Type "/" for block options or just start typing</div>
+              <button 
+                onClick={() => insertBlockAt(0, 'text')} 
+                style={{ 
+                  marginTop: 16,
+                  padding: '10px 20px', 
+                  borderRadius: 8, 
+                  background: '#2563eb', 
+                  color: 'white', 
+                  border: 'none',
+                  cursor: 'pointer'
+                }}
+              >
+                Add your first block
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {blocks.map((block, index) => (
+                <NotionBlock
+                  key={block.id}
+                  block={block}
+                  index={index}
+                  isLast={index === blocks.length - 1}
+                  onUpdate={(patch) => updateBlockData(block.id, patch)}
+                  onDelete={() => deleteBlock(block.id)}
+                  onKeyDown={(e) => handleKeyDown(e, index, block)}
+                  onMove={moveBlock}
+                  onInsert={(type) => insertBlockAt(index, type)}
+                  focusedBlockId={focusedBlockId}
+                  setFocusedBlockId={setFocusedBlockId}
+                  dragIndex={dragIndex}
+                  setDragIndex={setDragIndex}
+                  dragOverIndex={dragOverIndex}
+                  setDragOverIndex={setDragOverIndex}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Slash Menu */}
+        {slashMenuOpen && (
+          <div style={{ position: 'absolute', left: slashMenuOpen.position.x, top: slashMenuOpen.position.y }}>
+            <SlashMenu />
+          </div>
+        )}
+      </div>
+    </div>
+// NotionBlock component for inline editing
+function NotionBlock({ 
+  block, 
+  index, 
+  isLast, 
+  onUpdate, 
+  onDelete, 
+  onKeyDown, 
+  onMove, 
+  onInsert, 
+  focusedBlockId, 
+  setFocusedBlockId,
+  dragIndex,
+  setDragIndex,
+  dragOverIndex,
+  setDragOverIndex
+}) {
+  const [localData, setLocalData] = useState(block.data || {});
+  const [showTypeMenu, setShowTypeMenu] = useState(false);
+  const blockRef = useRef(null);
+
+  useEffect(() => {
+    setLocalData(block.data || {});
+  }, [block.data]);
+
+  const handleDataChange = (patch) => {
+    const newData = { ...localData, ...patch };
+    setLocalData(newData);
+    onUpdate({ data: newData });
+  };
+
+  const handleTypeChange = (newType) => {
+    onUpdate({ 
+      block_type: newType, 
+      data: normalizeBlockData(newType, {})
+    });
+    setShowTypeMenu(false);
+  };
+
+  const handleDragStart = (e) => {
+    setDragIndex(index);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (dragIndex !== null && dragIndex !== index) {
+      setDragOverIndex(index);
+    }
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    if (dragIndex !== null && dragIndex !== index) {
+      onMove(dragIndex, index);
+    }
+    setDragIndex(null);
+    setDragOverIndex(null);
+  };
+
+  const isDragging = dragIndex === index;
+  const isDragOver = dragOverIndex === index;
+  const isFocused = focusedBlockId === block.id;
+
+  const blockTypeInfo = BLOCK_TYPES.find(t => t.value === block.block_type) || BLOCK_TYPES[0];
+
+  return (
+    <div
+      ref={blockRef}
+      draggable
+      onDragStart={handleDragStart}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+      style={{
+        position: 'relative',
+        opacity: isDragging ? 0.5 : 1,
+        transform: isDragOver ? 'translateY(2px)' : 'none',
+        transition: 'transform 0.15s ease',
+        marginBottom: 2,
+        borderRadius: 8,
+        border: isFocused ? '2px solid #2563eb' : '2px solid transparent',
+        background: isFocused ? '#0f1629' : 'transparent',
+        group: true
+      }}
+      onClick={() => setFocusedBlockId(block.id)}
+    >
+      {/* Drag indicator */}
+      {isDragOver && (
+        <div style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 2,
+          background: '#2563eb',
+          borderRadius: 1,
+          zIndex: 10
+        }} />
+      )}
+
+      <div style={{
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: 8,
+        padding: 12,
+        minHeight: 48
+      }}>
+        {/* Drag handle */}
+        <div
+          style={{
+            width: 20,
+            height: 20,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'grab',
+            color: '#6b7280',
+            opacity: isFocused ? 1 : 0,
+            transition: 'opacity 0.15s ease',
+            fontSize: 14
+          }}
+          title="Drag to reorder"
+        >
+          ⋮⋮
+        </div>
+
+        {/* Block type icon */}
+        <div
+          style={{
+            width: 20,
+            height: 20,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            fontSize: 14,
+            position: 'relative'
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowTypeMenu(!showTypeMenu);
+          }}
+          title={`Change block type (${blockTypeInfo.label})`}
+        >
+          {blockTypeInfo.icon}
+          
+          {/* Type menu */}
+          {showTypeMenu && (
+            <div style={{
+              position: 'absolute',
+              top: '100%',
+              left: 0,
+              background: '#111827',
+              border: '1px solid #374151',
+              borderRadius: 8,
+              padding: 8,
+              minWidth: 200,
+              zIndex: 20,
+              boxShadow: '0 10px 25px rgba(0,0,0,0.5)'
+            }}>
+              {BLOCK_TYPES.map(type => (
+                <div
+                  key={type.value}
+                  onClick={() => handleTypeChange(type.value)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '8px 12px',
+                    borderRadius: 6,
+                    cursor: 'pointer',
+                    background: type.value === block.block_type ? '#1f2937' : 'transparent',
+                    color: '#e5e7eb',
+                    fontSize: 14
+                  }}
+                  onMouseEnter={(e) => e.target.style.background = '#1f2937'}
+                  onMouseLeave={(e) => e.target.style.background = type.value === block.block_type ? '#1f2937' : 'transparent'}
+                >
+                  <span>{type.icon}</span>
+                  <span>{type.label}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Block content */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <BlockBody
+            block={block}
+            onChange={handleDataChange}
+            onKeyDown={(e) => onKeyDown(e, index, block)}
+            isFocused={isFocused}
+            onInsertBlock={onInsert}
+          />
+        </div>
+
+        {/* Actions menu */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
+          opacity: isFocused ? 1 : 0,
+          transition: 'opacity 0.15s ease'
+        }}>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onInsert('text');
+            }}
+            style={{
+              width: 24,
+              height: 24,
+              border: 'none',
+              background: 'transparent',
+              color: '#6b7280',
+              cursor: 'pointer',
+              borderRadius: 4,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 16
+            }}
+            title="Add block below"
+          >
+            +
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+            style={{
+              width: 24,
+              height: 24,
+              border: 'none',
+              background: 'transparent',
+              color: '#ef4444',
+              cursor: 'pointer',
+              borderRadius: 4,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 16
+            }}
+            title="Delete block"
+          >
+            ×
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BlockBody({ block, onChange, onKeyDown, isFocused, onInsertBlock }) {
+  const d = block.data || {};
+  const t = block.block_type;
+
+  const common = {
+    style: {
+      width: '100%',
+      padding: isFocused ? '12px 16px' : '8px 12px',
+      border: 'none',
+      outline: 'none',
+      background: 'transparent',
+      color: '#e5e7eb',
+      fontSize: t === 'heading' ? '20px' : '14px',
+      fontWeight: t === 'heading' ? '600' : '400',
+      resize: 'none',
+      fontFamily: t === 'code' ? 'Monaco, Consolas, monospace' : 'inherit'
+    },
+    onKeyDown: (e) => {
+      // Handle slash commands
+      if (e.key === '/' && !e.target.value.trim()) {
+        e.preventDefault();
+        onInsertBlock && onInsertBlock('text');
+        return;
+      }
+      onKeyDown && onKeyDown(e);
+    }
+  };
+
+  if (t === 'text' || t === 'heading') {
+    return (
+      <textarea
+        {...common}
+        rows={t === 'heading' ? 1 : 3}
+        value={d.content || ''}
+        onChange={(e) => onChange({ content: e.target.value })}
+        placeholder={t === 'heading' ? 'Heading' : 'Type "/" for commands, or just start writing...'}
+        style={{
+          ...common.style,
+          minHeight: t === 'heading' ? '32px' : '60px',
+          overflow: 'hidden'
+        }}
+        onInput={(e) => {
+          // Auto-resize textarea
+          e.target.style.height = 'auto';
+          e.target.style.height = e.target.scrollHeight + 'px';
+        }}
+      />
+    );
+  }
+
+  if (t === 'divider') {
+    return (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        padding: '16px 0',
+        color: '#6b7280'
+      }}>
+        <div style={{ flex: 1, height: 1, background: '#374151' }} />
+        <span style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          {d.label || 'Section Break'}
+        </span>
+        <div style={{ flex: 1, height: 1, background: '#374151' }} />
+      </div>
+    );
+  }
+
+  if (t === 'image') {
+    return (
+      <div style={{ display: 'grid', gap: 8 }}>
+        <input
+          {...common}
+          value={d.url || ''}
+          onChange={(e) => onChange({ url: e.target.value })}
+          placeholder="Image URL"
+        />
+        {d.url && (
+          <img 
+            src={d.url} 
+            alt={d.alt || ''} 
+            style={{ 
+              maxWidth: '100%', 
+              borderRadius: 8,
+              border: '1px solid #374151'
+            }} 
+          />
+        )}
+        <input
+          {...common}
+          value={d.alt || ''}
+          onChange={(e) => onChange({ alt: e.target.value })}
+          placeholder="Alt text (optional)"
+          style={{ ...common.style, fontSize: '12px', color: '#9ca3af' }}
+        />
+      </div>
+    );
+  }
+
+  if (t === 'code') {
+    return (
+      <div style={{ display: 'grid', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input
+            value={d.language || 'javascript'}
+            onChange={(e) => onChange({ language: e.target.value })}
+            placeholder="Language"
+            style={{
+              ...common.style,
+              width: '120px',
+              fontSize: '12px',
+              padding: '4px 8px',
+              border: '1px solid #374151',
+              borderRadius: 4,
+              background: '#1f2937'
+            }}
+          />
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '12px', color: '#9ca3af' }}>
+            <input
+              type="checkbox"
+              checked={!!d.show_line_numbers}
+              onChange={(e) => onChange({ show_line_numbers: e.target.checked })}
+            />
+            Line numbers
+          </label>
+        </div>
+        <textarea
+          {...common}
+          rows={6}
+          value={d.code || ''}
+          onChange={(e) => onChange({ code: e.target.value })}
+          placeholder="// Your code here"
+          style={{
+            ...common.style,
+            fontFamily: 'Monaco, Consolas, monospace',
+            background: '#0b1220',
+            border: '1px solid #374151',
+            borderRadius: 8,
+            padding: '12px'
+          }}
+        />
+      </div>
+    );
+  }
+
+  if (t === 'video') {
+    return (
+      <div style={{ display: 'grid', gap: 8 }}>
+        <input
+          {...common}
+          value={d.url || ''}
+          onChange={(e) => onChange({ url: e.target.value })}
+          placeholder="Video URL"
+        />
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+          <input
+            {...common}
+            value={d.provider || 'file'}
+            onChange={(e) => onChange({ provider: e.target.value })}
+            placeholder="Provider"
+            style={{ ...common.style, fontSize: '12px' }}
+          />
+          <input
+            type="number"
+            value={d.start || ''}
+            onChange={(e) => onChange({ start: e.target.value })}
+            placeholder="Start (s)"
+            style={{ ...common.style, fontSize: '12px' }}
+          />
+          <input
+            type="number"
+            value={d.end || ''}
+            onChange={(e) => onChange({ end: e.target.value })}
+            placeholder="End (s)"
+            style={{ ...common.style, fontSize: '12px' }}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (t === 'prompt') {
+    return (
+      <div style={{ display: 'grid', gap: 8 }}>
+        <textarea
+          {...common}
+          rows={4}
+          value={d.prompt || ''}
+          onChange={(e) => onChange({ prompt: e.target.value })}
+          placeholder="Enter your prompt..."
+          style={{
+            ...common.style,
+            background: '#1f2937',
+            border: '1px solid #374151',
+            borderRadius: 8,
+            padding: '12px'
+          }}
+        />
+        <input
+          {...common}
+          value={d.placeholder || ''}
+          onChange={(e) => onChange({ placeholder: e.target.value })}
+          placeholder="Input placeholder"
+          style={{ ...common.style, fontSize: '12px', color: '#9ca3af' }}
+        />
+      </div>
+    );
+  }
+
+  return null;
+}
+
+// NotionBlock component for inline editing
+function NotionBlock({ 
+  block, 
+  index, 
+  isLast, 
+  onUpdate, 
+  onDelete, 
+  onKeyDown, 
+  onMove, 
+  onInsert, 
+  focusedBlockId, 
+  setFocusedBlockId,
+  dragIndex,
+  setDragIndex,
+  dragOverIndex,
+  setDragOverIndex
+}) {
+  const [localData, setLocalData] = useState(block.data || {});
+  const [showTypeMenu, setShowTypeMenu] = useState(false);
+  const blockRef = useRef(null);
+
+  useEffect(() => {
+    setLocalData(block.data || {});
+  }, [block.data]);
+
+  const handleDataChange = (patch) => {
+    const newData = { ...localData, ...patch };
+    setLocalData(newData);
+    onUpdate({ data: newData });
+  };
+
+  const handleTypeChange = (newType) => {
+    onUpdate({ 
+      block_type: newType, 
+      data: normalizeBlockData(newType, {})
+    });
+    setShowTypeMenu(false);
+  };
+
+  const handleDragStart = (e) => {
+    setDragIndex(index);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (dragIndex !== null && dragIndex !== index) {
+      setDragOverIndex(index);
+    }
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    if (dragIndex !== null && dragIndex !== index) {
+      onMove(dragIndex, index);
+    }
+    setDragIndex(null);
+    setDragOverIndex(null);
+  };
+
+  const isDragging = dragIndex === index;
+  const isDragOver = dragOverIndex === index;
+  const isFocused = focusedBlockId === block.id;
+
+  const blockTypeInfo = BLOCK_TYPES.find(t => t.value === block.block_type) || BLOCK_TYPES[0];
+
+  return (
+    <div
+      ref={blockRef}
+      draggable
+      onDragStart={handleDragStart}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+      style={{
+        position: 'relative',
+        opacity: isDragging ? 0.5 : 1,
+        transform: isDragOver ? 'translateY(2px)' : 'none',
+        transition: 'transform 0.15s ease',
+        marginBottom: 2,
+        borderRadius: 8,
+        border: isFocused ? '2px solid #2563eb' : '2px solid transparent',
+        background: isFocused ? '#0f1629' : 'transparent'
+      }}
+      onClick={() => setFocusedBlockId(block.id)}
+    >
+      {/* Drag indicator */}
+      {isDragOver && (
+        <div style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 2,
+          background: '#2563eb',
+          borderRadius: 1,
+          zIndex: 10
+        }} />
+      )}
+
+      <div style={{
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: 8,
+        padding: 12,
+        minHeight: 48
+      }}>
+        {/* Drag handle */}
+        <div
+          style={{
+            width: 20,
+            height: 20,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'grab',
+            color: '#6b7280',
+            opacity: isFocused ? 1 : 0,
+            transition: 'opacity 0.15s ease',
+            fontSize: 14
+          }}
+          title="Drag to reorder"
+        >
+          ⋮⋮
+        </div>
+
+        {/* Block type icon */}
+        <div
+          style={{
+            width: 20,
+            height: 20,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            fontSize: 14,
+            position: 'relative'
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowTypeMenu(!showTypeMenu);
+          }}
+          title={`Change block type (${blockTypeInfo.label})`}
+        >
+          {blockTypeInfo.icon}
+          
+          {/* Type menu */}
+          {showTypeMenu && (
+            <div style={{
+              position: 'absolute',
+              top: '100%',
+              left: 0,
+              background: '#111827',
+              border: '1px solid #374151',
+              borderRadius: 8,
+              padding: 8,
+              minWidth: 200,
+              zIndex: 20,
+              boxShadow: '0 10px 25px rgba(0,0,0,0.5)'
+            }}>
+              {BLOCK_TYPES.map(type => (
+                <div
+                  key={type.value}
+                  onClick={() => handleTypeChange(type.value)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '8px 12px',
+                    borderRadius: 6,
+                    cursor: 'pointer',
+                    background: type.value === block.block_type ? '#1f2937' : 'transparent',
+                    color: '#e5e7eb',
+                    fontSize: 14
+                  }}
+                  onMouseEnter={(e) => e.target.style.background = '#1f2937'}
+                  onMouseLeave={(e) => e.target.style.background = type.value === block.block_type ? '#1f2937' : 'transparent'}
+                >
+                  <span>{type.icon}</span>
+                  <span>{type.label}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Block content */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <BlockBody
+            block={block}
+            onChange={handleDataChange}
+            onKeyDown={(e) => onKeyDown(e, index, block)}
+            isFocused={isFocused}
+            onInsertBlock={onInsert}
+          />
+        </div>
+
+        {/* Actions menu */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
+          opacity: isFocused ? 1 : 0,
+          transition: 'opacity 0.15s ease'
+        }}>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onInsert('text');
+            }}
+            style={{
+              width: 24,
+              height: 24,
+              border: 'none',
+              background: 'transparent',
+              color: '#6b7280',
+              cursor: 'pointer',
+              borderRadius: 4,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 16
+            }}
+            title="Add block below"
+          >
+            +
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+            style={{
+              width: 24,
+              height: 24,
+              border: 'none',
+              background: 'transparent',
+              color: '#ef4444',
+              cursor: 'pointer',
+              borderRadius: 4,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 16
+            }}
+            title="Delete block"
+          >
+            ×
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,42 @@
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Python / Django
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.sqlite3
+db.sqlite3
+dev_db.sqlite3
+media/uploads/
+*.log
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Node / React
+node_modules/
+frontend/node_modules/
+frontend/build/
+frontend/.cache/
+
+# Coverage / testing
+.coverage
+coverage.xml
+htmlcov/
+pytest_cache/
+
+# Environment / secrets
+.env
+.env.*
+
+# VS Code / IDE
+.vscode/
+.idea/

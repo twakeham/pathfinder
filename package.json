@@ -1,0 +1,14 @@
+{
+  "name": "pathfinder-dev",
+  "version": "0.0.1",
+  "private": true,
+  "proxy": "http://localhost:8000",
+  "scripts": {
+    "backend": "cd backend && d:\\Pathfinder\\.venv\\Scripts\\python.exe manage.py runserver",
+    "frontend": "cd frontend && npm start",
+    "dev": "concurrently \"npm run backend\" \"npm run frontend\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
