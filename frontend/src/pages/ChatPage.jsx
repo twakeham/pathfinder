@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import '../styles/chat.css';
 import 'github-markdown-css/github-markdown-dark.css';
 import MessageList from '../components/chat/MessageList';
+import CompareMessageList from '../components/chat/CompareMessageList';
 import ControlsPanel from '../components/chat/ControlsPanel';
 import { useAuth } from '../auth/AuthContext';
 import { createChatApi } from '../services/api';
@@ -29,9 +30,15 @@ export default function ChatPage() {
     } catch {}
     return { temperature: 0.7, maxTokens: 512, topP: 1.0, model: 'default' };
   });
-  // Compare mode
+  // Compare mode: reuse primary params; only choose a secondary model
   const [compareEnabled, setCompareEnabled] = useState(false);
-  const [paramsB, setParamsB] = useState(() => ({ temperature: 0.7, maxTokens: 512, topP: 1.0, model: 'default' }));
+  const [compareModel, setCompareModel] = useState(() => {
+    try {
+      const saved = localStorage.getItem('chatCompareModel');
+      if (saved) return saved;
+    } catch {}
+    return 'default';
+  });
 
   // Composer state for 1.4.4 (disabled when empty)
   const [composerText, setComposerText] = useState('');
@@ -110,6 +117,10 @@ export default function ChatPage() {
   useEffect(() => {
     try { localStorage.setItem('chatParams', JSON.stringify(params)); } catch {}
   }, [params]);
+  // Persist compareModel
+  useEffect(() => {
+    try { localStorage.setItem('chatCompareModel', String(compareModel)); } catch {}
+  }, [compareModel]);
 
   // 2.4 Clear chat via new conversation
   const onClearChat = async () => {
@@ -134,8 +145,8 @@ export default function ChatPage() {
     setIsStreaming(true);
     try {
       if (!api) throw new Error('Not authenticated');
-      const p = which === 'B' ? paramsB : params;
-      const payload = { content: text, model: p.model, temperature: p.temperature, top_p: p.topP, max_tokens: p.maxTokens };
+      const model = which === 'B' ? compareModel : params.model;
+      const payload = { content: text, model, temperature: params.temperature, top_p: params.topP, max_tokens: params.maxTokens };
       const data = await api.generate(conversationId, payload);
       setMessages((prev) => {
         const withoutTemp = prev.filter((m) => m.id !== tempId);
@@ -147,8 +158,8 @@ export default function ChatPage() {
     } catch (e) {
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
       setError({ message: e?.message || 'Failed to generate response', providerUsed: e?.providerUsed });
-      const p = which === 'B' ? paramsB : params;
-      setLastFailed({ conversationId, content: text, payload: { model: p.model, temperature: p.temperature, top_p: p.topP, max_tokens: p.maxTokens } });
+      const model = which === 'B' ? compareModel : params.model;
+      setLastFailed({ conversationId, content: text, payload: { model, temperature: params.temperature, top_p: params.topP, max_tokens: params.maxTokens } });
       setComposerText(text);
     } finally {
       setIsStreaming(false);
@@ -165,13 +176,13 @@ export default function ChatPage() {
     setError(null);
     // Prefer streaming via WS; fallback to REST if WS unavailable
     let sentViaWS = false;
-    if (wsClient?.send) {
+  if (wsClient?.send) {
       try {
         // Send A (always)
         wsClient.send({ type: 'generate', request_id: 'A', content: text, params: { model: params.model, temperature: params.temperature, top_p: params.topP, max_tokens: params.maxTokens } });
         // Send B (if compare)
         if (compareEnabled) {
-          wsClient.send({ type: 'generate', request_id: 'B', content: text, params: { model: paramsB.model, temperature: paramsB.temperature, top_p: paramsB.topP, max_tokens: paramsB.maxTokens } });
+      wsClient.send({ type: 'generate', request_id: 'B', content: text, params: { model: compareModel, temperature: params.temperature, top_p: params.topP, max_tokens: params.maxTokens } });
         }
         sentViaWS = true;
         // Show immediate typing indicator while waiting for first chunk
@@ -270,6 +281,8 @@ export default function ChatPage() {
             )}
             {isLoading ? (
               <div className="chat-empty">Loading conversation…</div>
+            ) : compareEnabled ? (
+              <CompareMessageList messages={messages} showTyping={isStreaming} />
             ) : (
               <MessageList messages={messages} showTyping={isStreaming} />
             )}
@@ -335,8 +348,8 @@ export default function ChatPage() {
                   onChange={setParams}
                   compareEnabled={compareEnabled}
                   onToggleCompare={setCompareEnabled}
-                  valueB={paramsB}
-                  onChangeB={setParamsB}
+                  compareModel={compareModel}
+                  onChangeCompareModel={setCompareModel}
                 />
               </div>
             </div>
