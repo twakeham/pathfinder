@@ -37,6 +37,8 @@ pytest_cache/
 # Environment / secrets
 .env
 .env.*
+backend.env
+backend/.env
 
 # VS Code / IDE
 .vscode/

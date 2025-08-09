@@ -72,7 +72,7 @@ Based on the MVP PRD, this task list provides a step-by-step implementation guid
   - [x] 3.6 Create prompt template library with categorization
   - [x] 3.7 Implement course-specific prompt collections
   - [ ] 3.8 Build instructor interface for content creation and management
-    - [ ] 3.8.1 Routes and layout: add Instructor area (e.g., `/instructor`, `/instructor/courses`, `/instructor/courses/:id/edit`)
+    - [x] 3.8.1 Routes and layout: add Instructor area (e.g., `/instructor`, `/instructor/courses`, `/instructor/courses/:id/edit`)
     - [x] 3.8.2 Course list: searchable/filterable table, “New Course” modal, link to editor
     - [x] 3.8.3 Course editor: metadata form (title, description, published), save/cancel, validation
     - [x] 3.8.4 Module manager: list/create/edit/delete, drag-and-drop ordering, persist order

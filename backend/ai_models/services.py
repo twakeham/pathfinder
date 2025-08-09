@@ -16,11 +16,19 @@ class ChatMessage:
 
 class AIModel(ABC):
     @abstractmethod
-    def chat(self, messages: Iterable[ChatMessage], *, model: Optional[str] = None, temperature: float = 0.7, max_tokens: int = 512) -> ChatMessage:
+    def chat(
+        self,
+        messages: Iterable[ChatMessage],
+        *,
+        model: Optional[str] = None,
+        temperature: float = 0.7,
+        top_p: float = 1.0,
+        max_tokens: int = 512,
+    ) -> ChatMessage:
         ...
 
 class EchoModel(AIModel):
-    def chat(self, messages: Iterable[ChatMessage], *, model: Optional[str] = None, temperature: float = 0.7, max_tokens: int = 512) -> ChatMessage:
+    def chat(self, messages: Iterable[ChatMessage], *, model: Optional[str] = None, temperature: float = 0.7, top_p: float = 1.0, max_tokens: int = 512) -> ChatMessage:
         last_user = next((m for m in reversed(list(messages)) if m.role == 'user'), None)
         return ChatMessage(role='assistant', content=last_user.content if last_user else '(no input)')
 
@@ -59,7 +67,7 @@ class OpenAIModel(AIModel):
             # Legacy 0.x API
             _openai.api_key = self.api_key  # type: ignore[attr-defined]
 
-    def chat(self, messages: Iterable[ChatMessage], *, model: Optional[str] = None, temperature: float = 0.7, max_tokens: int = 512) -> ChatMessage:
+    def chat(self, messages: Iterable[ChatMessage], *, model: Optional[str] = None, temperature: float = 0.7, top_p: float = 1.0, max_tokens: int = 512) -> ChatMessage:
         model_name = model or os.environ.get('OPENAI_CHAT_MODEL', 'gpt-4o-mini')
         payload = [{ 'role': m.role, 'content': m.content } for m in messages]
         if self._mode == 'v1':
@@ -67,6 +75,7 @@ class OpenAIModel(AIModel):
                 model=model_name,
                 messages=payload,
                 temperature=temperature,
+                top_p=top_p,
                 max_tokens=max_tokens,
             )
             content = (resp.choices[0].message.content or '').strip()
@@ -76,6 +85,7 @@ class OpenAIModel(AIModel):
                 model=model_name,
                 messages=payload,
                 temperature=temperature,
+                top_p=top_p,
                 max_tokens=max_tokens,
             )
             # Legacy responses keep text at choices[0].message['content']

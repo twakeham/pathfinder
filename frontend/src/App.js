@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route, Navigate, Link, useLocation } from 'react
 import Login from './components/Auth/Login';
 import Register from './components/Auth/Register';
 import { AuthProvider, useAuth } from './auth/AuthContext';
+import RequireAuth from './auth/RequireAuth';
 import ProfilePage from './components/Profile/ProfilePage';
 import InstructorLayout from './components/Instructor/InstructorLayout';
 import CoursesList from './components/Instructor/CoursesList';
@@ -12,6 +13,7 @@ import ModuleEditor from './components/Instructor/ModuleEditor';
 import LessonEditor from './components/Instructor/LessonEditor';
 import QuizEditor from './components/Instructor/QuizEditor';
 import QuestionEditor from './components/Instructor/QuestionEditor';
+import ChatPage from './pages/ChatPage';
 
 const Protected = ({ children, roles }) => {
   const { tokens, user, loadingUser } = useAuth();
@@ -45,6 +47,21 @@ const Home = () => {
           <li>Access learning content</li>
           <li>Use chat assistant</li>
         </ul>
+      </div>
+      {/* Chat Playground CTA */}
+      <div style={{ marginTop: 16, padding: 16, border: '1px solid #1f2937', borderRadius: 8, background: '#0f172a' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+          <div>
+            <h3 style={{ margin: 0, color: '#e5e7eb' }}>Chat Playground</h3>
+            <p style={{ marginTop: 6, color: '#9ca3af' }}>Experiment with AI prompts in a fast, streaming chat experience.</p>
+          </div>
+          <Link
+            to="/chat"
+            style={{ display: 'inline-block', padding: '10px 14px', borderRadius: 8, background: '#111827', color: 'white', border: '1px solid #374151', textDecoration: 'none' }}
+          >
+            Open Chat Playground
+          </Link>
+        </div>
       </div>
     </div>
   );
@@ -114,6 +131,7 @@ function AppRoutes() {
           <Route path="questions/:questionId/edit" element={<QuestionEditor />} />
         </Route>
         <Route path="/profile" element={<Protected><ProfilePage /></Protected>} />
+  <Route path="/chat" element={<RequireAuth><ChatPage /></RequireAuth>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </>

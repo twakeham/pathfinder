@@ -45,13 +45,32 @@ class ConversationViewSet(viewsets.ModelViewSet):
 	def generate(self, request, pk=None):
 		"""Append a user message and generate assistant reply via provider."""
 		convo = self.get_object()
-		text = (request.data or {}).get('content', '')
+		data = request.data or {}
+		text = data.get('content', '')
 		if not text.strip():
 			return Response({'detail': 'content is required'}, status=400)
 		# Create the user message
 		user_msg = Message.objects.create(conversation=convo, role='user', content=text)
 		# Build history and call provider
 		history = [ChatMessage(role=m.role, content=m.content) for m in convo.messages.all()]
+		# Parameters with safe defaults and bounds
+		model = data.get('model') or None
+		try:
+			temperature = float(data.get('temperature', 0.7))
+		except Exception:
+			temperature = 0.7
+		try:
+			top_p = float(data.get('top_p', 1.0))
+		except Exception:
+			top_p = 1.0
+		try:
+			max_tokens = int(data.get('max_tokens', 512))
+		except Exception:
+			max_tokens = 512
+		# Clamp to safe ranges
+		temperature = max(0.0, min(1.0, temperature))
+		top_p = max(0.0, min(1.0, top_p))
+		max_tokens = max(1, min(2048, max_tokens))
 		# Decide provider
 		force = (request.query_params.get('provider') or '').lower().strip()
 		want_openai = force == 'openai' or getattr(settings, 'USE_OPENAI', False)
@@ -65,7 +84,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
 				return Response({'detail': 'OpenAI provider not available', 'error': str(e)}, status=502)
 		else:
 			provider = EchoModel()
-		reply = provider.chat(history)
+		reply = provider.chat(history, model=model, temperature=temperature, top_p=top_p, max_tokens=max_tokens)
 		asst_msg = Message.objects.create(conversation=convo, role='assistant', content=reply.content)
 		return Response({
 			'user': MessageSerializer(user_msg).data,
