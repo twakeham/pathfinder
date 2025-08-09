@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 
 // Placeholder controls panel for Task 1.4.3; inputs are disabled and not wired yet
 export default function ControlsPanel({ value, onChange }) {
@@ -6,6 +6,26 @@ export default function ControlsPanel({ value, onChange }) {
   const [maxTokens, setMaxTokens] = useState(value?.maxTokens ?? 512);
   const [topP, setTopP] = useState(value?.topP ?? 1.0);
   const [model, setModel] = useState(value?.model ?? 'default');
+  // Presets mapping; model intentionally left unchanged when applying
+  const presets = useMemo(() => ({
+    precise: { temperature: 0.2, topP: 0.9, maxTokens: 256 },
+    balanced: { temperature: 0.7, topP: 1.0, maxTokens: 512 },
+    creative: { temperature: 0.95, topP: 1.0, maxTokens: 768 },
+  }), []);
+  const currentPreset = useMemo(() => {
+    const approx = (a, b) => Math.abs(a - b) < 1e-6;
+    if (approx(temp, presets.precise.temperature) && approx(topP, presets.precise.topP) && maxTokens === presets.precise.maxTokens) return 'precise';
+    if (approx(temp, presets.balanced.temperature) && approx(topP, presets.balanced.topP) && maxTokens === presets.balanced.maxTokens) return 'balanced';
+    if (approx(temp, presets.creative.temperature) && approx(topP, presets.creative.topP) && maxTokens === presets.creative.maxTokens) return 'creative';
+    return 'custom';
+  }, [temp, topP, maxTokens, presets]);
+  const applyPreset = (key) => {
+    const p = presets[key];
+    if (!p) return;
+    setTemp(p.temperature);
+    setTopP(p.topP);
+    setMaxTokens(p.maxTokens);
+  };
 
   // Sync down when parent value changes (e.g., load from storage)
   useEffect(() => {
@@ -23,6 +43,18 @@ export default function ControlsPanel({ value, onChange }) {
   return (
     <div>
       <div className="controls-grid">
+        <div className="control">
+          <label className="control-label" htmlFor="preset">
+            <span className="control-label-name">Preset</span>
+          </label>
+          <div className="control-help">Quickly set temperature, top-p, and max tokens.</div>
+          <select id="preset" value={currentPreset} onChange={(e) => applyPreset(e.target.value)}>
+            <option value="custom">Custom</option>
+            <option value="precise">Precise (temp 0.20, top-p 0.90, max 256)</option>
+            <option value="balanced">Balanced (temp 0.70, top-p 1.00, max 512)</option>
+            <option value="creative">Creative (temp 0.95, top-p 1.00, max 768)</option>
+          </select>
+        </div>
         <div className="control">
           <label className="control-label" htmlFor="model">
             <span className="control-label-name">Model</span>
