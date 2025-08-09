@@ -21,8 +21,10 @@ export default function ChatPage() {
   const [error, setError] = useState(null); // { message, providerUsed } for 2.6
   const [lastFailed, setLastFailed] = useState(null); // { conversationId, content, payload }
   const [wsClient, setWsClient] = useState(null);
-  const streamStartedRef = useRef(false);
-  const wsFallbackTimerRef = useRef(null);
+  // Track streaming state per variant for WS fallback and typing indicator
+  const streamStartedRef = useRef({ A: false, B: false });
+  const wsFallbackTimersRef = useRef({ A: null, B: null });
+  const activeStreamsRef = useRef(0);
   const [params, setParams] = useState(() => {
     try {
       const saved = localStorage.getItem('chatParams');
@@ -87,11 +89,16 @@ export default function ChatPage() {
       onEvent: (evt) => {
         const variant = evt?.request_id === 'B' ? 'B' : 'A';
         if (evt?.type === 'message_start') {
-          // Begin a streaming assistant message
+          // Begin a streaming assistant message for variant
           setMessages((prev) => [...prev, { id: `stream-${variant}-${Date.now()}`, role: 'assistant', content: '', variant }]);
-      setIsStreaming(true);
-      streamStartedRef.current = true;
-      if (wsFallbackTimerRef.current) { clearTimeout(wsFallbackTimerRef.current); wsFallbackTimerRef.current = null; }
+          // mark stream active and clear its fallback timer
+          streamStartedRef.current[variant] = true;
+          if (wsFallbackTimersRef.current[variant]) {
+            clearTimeout(wsFallbackTimersRef.current[variant]);
+            wsFallbackTimersRef.current[variant] = null;
+          }
+          activeStreamsRef.current += 1;
+          setIsStreaming(true);
         } else if (evt?.type === 'delta') {
           setMessages((prev) => {
             const next = [...prev];
@@ -101,16 +108,38 @@ export default function ChatPage() {
             return next;
           });
         } else if (evt?.type === 'message_end') {
-          setIsStreaming(false);
-      if (wsFallbackTimerRef.current) { clearTimeout(wsFallbackTimerRef.current); wsFallbackTimerRef.current = null; }
+          // mark stream complete for variant
+          streamStartedRef.current[variant] = false;
+          if (wsFallbackTimersRef.current[variant]) {
+            clearTimeout(wsFallbackTimersRef.current[variant]);
+            wsFallbackTimersRef.current[variant] = null;
+          }
+          activeStreamsRef.current = Math.max(0, activeStreamsRef.current - 1);
+          setIsStreaming(activeStreamsRef.current > 0);
         } else if (evt?.type === 'error') {
-          setIsStreaming(false);
+          // treat as completion for typing indicator
+          streamStartedRef.current[variant] = false;
+          if (wsFallbackTimersRef.current[variant]) {
+            clearTimeout(wsFallbackTimersRef.current[variant]);
+            wsFallbackTimersRef.current[variant] = null;
+          }
+          activeStreamsRef.current = Math.max(0, activeStreamsRef.current - 1);
+          setIsStreaming(activeStreamsRef.current > 0);
           setError({ message: evt.detail || 'Streaming error' });
         }
       },
     });
     setWsClient(client);
-    return () => { client?.close?.(); setWsClient(null); if (wsFallbackTimerRef.current) { clearTimeout(wsFallbackTimerRef.current); wsFallbackTimerRef.current = null; } };
+    return () => {
+      client?.close?.();
+      setWsClient(null);
+      // clear any pending variant timers
+      for (const v of ['A','B']) {
+        if (wsFallbackTimersRef.current[v]) { clearTimeout(wsFallbackTimersRef.current[v]); wsFallbackTimersRef.current[v] = null; }
+        streamStartedRef.current[v] = false;
+      }
+      activeStreamsRef.current = 0;
+    };
   }, [conversationId, auth?.tokens?.access]);
 
   // Persist params when they change
@@ -187,20 +216,24 @@ export default function ChatPage() {
         sentViaWS = true;
         // Show immediate typing indicator while waiting for first chunk
         setIsStreaming(true);
-        streamStartedRef.current = false;
-        if (wsFallbackTimerRef.current) { clearTimeout(wsFallbackTimerRef.current); }
-        wsFallbackTimerRef.current = setTimeout(() => {
-          // If no streaming started yet, fallback to REST
-          if (!streamStartedRef.current) {
-            if (compareEnabled) {
-              // Do two REST calls sequentially to keep UI simple
-              performRestGenerate(text, tempId + '-A', 'A');
-              performRestGenerate(text, tempId + '-B', 'B');
-            } else {
-              performRestGenerate(text, tempId, 'A');
-            }
+        // Reset per-variant flags and timers
+        streamStartedRef.current.A = false;
+        streamStartedRef.current.B = false;
+        activeStreamsRef.current = 0;
+        for (const v of ['A','B']) { if (wsFallbackTimersRef.current[v]) { clearTimeout(wsFallbackTimersRef.current[v]); wsFallbackTimersRef.current[v] = null; } }
+        // Schedule independent fallbacks for A and (optionally) B
+        wsFallbackTimersRef.current.A = setTimeout(() => {
+          if (!streamStartedRef.current.A) {
+            performRestGenerate(text, tempId + '-A', 'A');
           }
         }, 800);
+        if (compareEnabled) {
+          wsFallbackTimersRef.current.B = setTimeout(() => {
+            if (!streamStartedRef.current.B) {
+              performRestGenerate(text, tempId + '-B', 'B');
+            }
+          }, 800);
+        }
       } catch (e) {
         sentViaWS = false;
       }
