@@ -33,17 +33,18 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         event_type = content.get('type')
         if event_type == 'generate':
             prompt = content.get('content') or ''
+            req_id = content.get('request_id')
             if not prompt.strip():
                 await self.send_json({"type": "error", "detail": "content is required"})
                 return
             # Simulate streaming events: start -> a few deltas -> end
-            await self.send_json({"type": "message_start", "role": "assistant"})
+            await self.send_json({"type": "message_start", "role": "assistant", "request_id": req_id})
             # naive chunking of a canned response for demo; real impl would call provider
             chunks = ["Thinking", ".", ".", ".", "\n", "Echo: ", prompt[:64]]
             for ch in chunks:
                 await sleep(0.15)
-                await self.send_json({"type": "delta", "content": ch})
-            await self.send_json({"type": "message_end"})
+                await self.send_json({"type": "delta", "content": ch, "request_id": req_id})
+            await self.send_json({"type": "message_end", "request_id": req_id})
             return
         # Default: echo payloads back (dev aid)
         await self.channel_layer.group_send(

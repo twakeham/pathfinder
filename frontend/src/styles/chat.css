@@ -79,6 +79,7 @@
 .message-item.message-user { background: #1e293b; border-color: #334155; }
 .message-item.message-assistant { background: #0b1220; border-color: #1f2937; }
 .message-content { white-space: normal; color: var(--text); }
+/* Compare labels show as part of role, handled in React */
 /* Typing indicator */
 .typing-bubble { display: inline-flex; align-items: center; justify-content: center; min-width: 56px; }
 .typing-dots { display: inline-flex; gap: 6px; height: 10px; align-items: center; }

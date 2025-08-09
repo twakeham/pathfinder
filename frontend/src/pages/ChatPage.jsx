@@ -29,6 +29,9 @@ export default function ChatPage() {
     } catch {}
     return { temperature: 0.7, maxTokens: 512, topP: 1.0, model: 'default' };
   });
+  // Compare mode
+  const [compareEnabled, setCompareEnabled] = useState(false);
+  const [paramsB, setParamsB] = useState(() => ({ temperature: 0.7, maxTokens: 512, topP: 1.0, model: 'default' }));
 
   // Composer state for 1.4.4 (disabled when empty)
   const [composerText, setComposerText] = useState('');
@@ -75,9 +78,10 @@ export default function ChatPage() {
       onClose: () => {},
       onError: () => {},
       onEvent: (evt) => {
+        const variant = evt?.request_id === 'B' ? 'B' : 'A';
         if (evt?.type === 'message_start') {
           // Begin a streaming assistant message
-          setMessages((prev) => [...prev, { id: `stream-${Date.now()}`, role: 'assistant', content: '' }]);
+          setMessages((prev) => [...prev, { id: `stream-${variant}-${Date.now()}`, role: 'assistant', content: '', variant }]);
       setIsStreaming(true);
       streamStartedRef.current = true;
       if (wsFallbackTimerRef.current) { clearTimeout(wsFallbackTimerRef.current); wsFallbackTimerRef.current = null; }
@@ -85,7 +89,7 @@ export default function ChatPage() {
           setMessages((prev) => {
             const next = [...prev];
             for (let i = next.length - 1; i >= 0; i--) {
-              if (next[i].role === 'assistant') { next[i] = { ...next[i], content: (next[i].content || '') + String(evt.content || '') }; break; }
+              if (next[i].role === 'assistant' && (next[i].variant || 'A') === variant) { next[i] = { ...next[i], content: (next[i].content || '') + String(evt.content || '') }; break; }
             }
             return next;
           });
@@ -126,21 +130,25 @@ export default function ChatPage() {
   };
 
   // 2.5 Send: optimistic user append then call generate
-  const performRestGenerate = async (text, tempId) => {
+  const performRestGenerate = async (text, tempId, which = 'A') => {
     setIsStreaming(true);
     try {
       if (!api) throw new Error('Not authenticated');
-      const payload = { content: text, model: params.model, temperature: params.temperature, top_p: params.topP, max_tokens: params.maxTokens };
+      const p = which === 'B' ? paramsB : params;
+      const payload = { content: text, model: p.model, temperature: p.temperature, top_p: p.topP, max_tokens: p.maxTokens };
       const data = await api.generate(conversationId, payload);
       setMessages((prev) => {
         const withoutTemp = prev.filter((m) => m.id !== tempId);
-        return [...withoutTemp, data.user, data.assistant];
+        // Tag assistant with variant label for display parity
+        const assistant = { ...data.assistant, variant: which };
+        return [...withoutTemp, data.user, assistant];
       });
       setError(null);
     } catch (e) {
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
       setError({ message: e?.message || 'Failed to generate response', providerUsed: e?.providerUsed });
-      setLastFailed({ conversationId, content: text, payload: { model: params.model, temperature: params.temperature, top_p: params.topP, max_tokens: params.maxTokens } });
+      const p = which === 'B' ? paramsB : params;
+      setLastFailed({ conversationId, content: text, payload: { model: p.model, temperature: p.temperature, top_p: p.topP, max_tokens: p.maxTokens } });
       setComposerText(text);
     } finally {
       setIsStreaming(false);
@@ -156,10 +164,15 @@ export default function ChatPage() {
     setComposerText('');
     setError(null);
     // Prefer streaming via WS; fallback to REST if WS unavailable
-  let sentViaWS = false;
-  if (wsClient?.send) {
+    let sentViaWS = false;
+    if (wsClient?.send) {
       try {
-        wsClient.send({ type: 'generate', content: text, params: { model: params.model, temperature: params.temperature, top_p: params.topP, max_tokens: params.maxTokens } });
+        // Send A (always)
+        wsClient.send({ type: 'generate', request_id: 'A', content: text, params: { model: params.model, temperature: params.temperature, top_p: params.topP, max_tokens: params.maxTokens } });
+        // Send B (if compare)
+        if (compareEnabled) {
+          wsClient.send({ type: 'generate', request_id: 'B', content: text, params: { model: paramsB.model, temperature: paramsB.temperature, top_p: paramsB.topP, max_tokens: paramsB.maxTokens } });
+        }
         sentViaWS = true;
         // Show immediate typing indicator while waiting for first chunk
         setIsStreaming(true);
@@ -168,7 +181,13 @@ export default function ChatPage() {
         wsFallbackTimerRef.current = setTimeout(() => {
           // If no streaming started yet, fallback to REST
           if (!streamStartedRef.current) {
-            performRestGenerate(text, tempId);
+            if (compareEnabled) {
+              // Do two REST calls sequentially to keep UI simple
+              performRestGenerate(text, tempId + '-A', 'A');
+              performRestGenerate(text, tempId + '-B', 'B');
+            } else {
+              performRestGenerate(text, tempId, 'A');
+            }
           }
         }, 800);
       } catch (e) {
@@ -176,7 +195,12 @@ export default function ChatPage() {
       }
     }
     if (!sentViaWS) {
-      performRestGenerate(text, tempId);
+      if (compareEnabled) {
+        performRestGenerate(text, tempId + '-A', 'A');
+        performRestGenerate(text, tempId + '-B', 'B');
+      } else {
+        performRestGenerate(text, tempId, 'A');
+      }
     }
   };
 
@@ -306,7 +330,14 @@ export default function ChatPage() {
                 <button className="btn btn-ghost" onClick={() => setShowOptions(false)} aria-label="Close">Close</button>
               </div>
               <div className="modal-body chat-controls">
-                <ControlsPanel value={params} onChange={setParams} />
+                <ControlsPanel
+                  value={params}
+                  onChange={setParams}
+                  compareEnabled={compareEnabled}
+                  onToggleCompare={setCompareEnabled}
+                  valueB={paramsB}
+                  onChangeB={setParamsB}
+                />
               </div>
             </div>
           </div>

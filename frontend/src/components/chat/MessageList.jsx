@@ -20,8 +20,8 @@ export default function MessageList({ messages = [], showTyping = false }) {
   return (
     <div className="message-list" role="log" aria-live="polite" aria-relevant="additions">
       {messages.map((m, idx) => {
-        const role = m.role || 'user';
-        const roleLabel = role === 'assistant' ? 'Assistant' : 'You';
+  const role = m.role || 'user';
+  const roleLabel = role === 'assistant' ? (m.variant ? `Assistant (${m.variant})` : 'Assistant') : 'You';
         return (
           <div key={m.id || idx} className={`message-row message-${role}`}>
             <div className="message-role" aria-hidden="true">{roleLabel}</div>
